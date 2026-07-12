@@ -1,0 +1,12 @@
+data/
+backups/
+EXPLAINER_SCRIPT.md
+.claude/
+__pycache__/
+*.pyc
+.env
+*.log
+.DS_Store
+.superpowers/
+docs/superpowers/
+venv/

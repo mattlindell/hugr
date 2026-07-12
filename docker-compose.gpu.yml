@@ -1,0 +1,21 @@
+# GPU override for the in-stack ollama service.
+#
+# Adds an NVIDIA GPU reservation to `ollama`. Kept separate from the base
+# docker-compose.yml so the base stack stays portable: `docker compose up`
+# works on hosts without NVIDIA + Docker GPU passthrough (it just runs ollama
+# on CPU). Apply this override only on hosts where `docker run --gpus all`
+# works (NVIDIA Container Toolkit + WSL2 GPU passthrough on Windows).
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+#
+
+services:
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

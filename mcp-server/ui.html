@@ -1,0 +1,789 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Claude Memory</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Mulish:wght@400;500;600;700;800;900&family=Cardo:ital@1&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+  <script src="https://unpkg.com/marked/marked.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --cs-blue:       #312888;
+      --cs-blue-hover: #241b7b;
+      --cs-blue-light: #009CFF;
+      --cs-blue-dark:  #1a1560;
+      --cs-coral:      #FF947B;
+      --cs-white:      #ffffff;
+      --cs-grey-light: #f8f7fc;
+      --cs-grey:       #6b6b78;
+      --cs-ink:        #1a1b1c;
+      --fg-1:          var(--cs-blue);
+      --fg-2:          #3d3d4a;
+      --fg-3:          var(--cs-grey);
+      --fg-accent:     var(--cs-blue-light);
+      --border-subtle: rgba(49,40,136,0.12);
+      --border-rule:   var(--cs-blue);
+      --shadow-xs:     0 1px 3px rgba(26,27,28,0.06);
+      --shadow-sm:     0 2px 8px rgba(26,27,28,0.08);
+      --shadow-lg:     0 30px 60px -20px rgba(50,50,93,0.25), 0 18px 36px -18px rgba(0,0,0,0.30);
+      --ease:          cubic-bezier(0.25,1,0.5,1);
+    }
+    body { font-family: 'Mulish', system-ui, sans-serif; background: var(--cs-grey-light); color: var(--fg-2); font-size: 14px; line-height: 1.6; }
+    #root { min-height: 100vh; }
+    .eyebrow { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.14em; color: var(--fg-accent); }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; font-variant-numeric: tabular-nums; }
+    .page-container { max-width: 1440px; margin: 0 auto; }
+    .btn-primary { background: var(--cs-blue); color: #fff; border: 2px solid var(--cs-blue); padding: 8px 16px; font-family: 'Mulish', sans-serif; font-size: 13px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; transition: background 150ms var(--ease), color 150ms var(--ease); }
+    .btn-primary:hover { background: transparent; color: var(--cs-blue); }
+    .btn-outline { background: transparent; color: var(--cs-blue); border: 1.5px solid rgba(49,40,136,0.18); padding: 6px 12px; font-family: 'Mulish', sans-serif; font-size: 12px; font-weight: 600; cursor: pointer; transition: background 150ms var(--ease), color 150ms var(--ease); }
+    .btn-outline:hover { background: var(--cs-blue); color: #fff; }
+    .btn-danger { background: var(--cs-coral); color: #fff; border: 2px solid var(--cs-coral); padding: 6px 12px; font-family: 'Mulish', sans-serif; font-size: 12px; font-weight: 600; cursor: pointer; }
+    .tag-pill { display: inline-block; border: 1.5px solid var(--cs-blue-light); border-radius: 18px; padding: 2px 10px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--cs-blue-light); margin: 2px; }
+    ::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-track { background: transparent; } ::-webkit-scrollbar-thumb { background: rgba(49,40,136,0.15); border-radius: 3px; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+
+const PROJECT_COLORS = ['#312888','#009CFF','#7A4DFF','#FF947B','#1FA890','#D9325A','#F5A623','#4A90D9'];
+const projectColorCache = {};
+let colorIdx = 0;
+function projectColor(name) {
+  if (!name) return PROJECT_COLORS[0];
+  if (!projectColorCache[name]) projectColorCache[name] = PROJECT_COLORS[colorIdx++ % PROJECT_COLORS.length];
+  return projectColorCache[name];
+}
+
+const KIND_COLORS = {
+  'type:decision':  { border: '#009CFF', bg: 'rgba(0,156,255,0.07)',   label: 'decision' },
+  'type:fix':       { border: '#1FA890', bg: 'rgba(31,168,144,0.10)',  label: 'fix'      },
+  'type:bug':       { border: '#1FA890', bg: 'rgba(31,168,144,0.10)',  label: 'bug'      },
+  'type:pattern':   { border: '#312888', bg: 'rgba(49,40,136,0.05)',   label: 'pattern'  },
+  'type:preference':{ border: '#7A4DFF', bg: 'rgba(122,77,255,0.07)', label: 'pref'     },
+  'type:warning':   { border: '#FF947B', bg: 'rgba(255,148,123,0.12)', label: 'note'     },
+};
+function kindStyle(tags = []) {
+  for (const t of tags) if (KIND_COLORS[t]) return KIND_COLORS[t];
+  return { border: '#009CFF', bg: 'rgba(0,156,255,0.07)', label: 'memory' };
+}
+
+function Eyebrow({ children, style }) {
+  return <div className="eyebrow" style={style}>{children}</div>;
+}
+function MeterBar({ value, color = 'var(--cs-blue-light)', width = 64, height = 3 }) {
+  return (
+    <div style={{ width, height, background: 'rgba(49,40,136,0.12)', borderRadius: 2, overflow: 'hidden', flexShrink: 0 }}>
+      <div style={{ width: `${Math.round(value * 100)}%`, height: '100%', background: color, borderRadius: 2, transition: 'width 320ms var(--ease)' }} />
+    </div>
+  );
+}
+
+// ── AppHeader ─────────────────────────────────────────────────────────────────
+function BrainMark() {
+  return (
+    <svg width="26" height="26" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M16 4 C8 4 4 10 4 16 C4 22 8 28 16 28" fill="#312888"/>
+      <path d="M16 4 C24 4 28 10 28 16 C28 22 24 28 16 28" fill="#009CFF"/>
+      <line x1="16" y1="4" x2="16" y2="28" stroke="white" strokeWidth="1.2"/>
+      <path d="M8 11 Q11 9 14 12" stroke="white" strokeWidth="0.9" fill="none" opacity="0.55"/>
+      <path d="M7 17 Q10 15 13 18" stroke="white" strokeWidth="0.9" fill="none" opacity="0.55"/>
+      <path d="M18 11 Q21 9 24 12" stroke="white" strokeWidth="0.9" fill="none" opacity="0.55"/>
+      <path d="M19 17 Q22 15 25 18" stroke="white" strokeWidth="0.9" fill="none" opacity="0.55"/>
+    </svg>
+  );
+}
+
+function AppHeader({ activeSection, healthy, latency }) {
+  const navItems = ['Timeline', 'Search', 'Preferences', 'Settings'];
+
+  function scrollTo(section) {
+    const el = document.getElementById(section);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  return (
+    <header style={{ position: 'sticky', top: 0, zIndex: 5, background: '#fff', borderBottom: '1px solid var(--border-subtle)', padding: '12px 28px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <BrainMark />
+        <span style={{ fontFamily: 'Mulish', fontSize: 16, fontWeight: 800, letterSpacing: '0.16em', textTransform: 'uppercase' }}>
+          <span style={{ color: '#312888' }}>CLAUDE</span>{' '}
+          <span style={{ color: '#009CFF' }}>MEMORY</span>
+        </span>
+      </div>
+      <nav style={{ display: 'flex', gap: 28 }}>
+        {navItems.map(item => {
+          const active = activeSection === item.toLowerCase();
+          return (
+            <button key={item} onClick={() => scrollTo(item.toLowerCase())}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'Mulish', fontSize: 13, fontWeight: 600, color: active ? '#312888' : 'rgba(49,40,136,0.5)', borderBottom: active ? '2px solid #312888' : '2px solid transparent', paddingBottom: 2, transition: 'color 150ms' }}>
+              {item}
+            </button>
+          );
+        })}
+      </nav>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'monospace', fontSize: 11, color: 'var(--cs-grey)' }}>
+        <span style={{ width: 7, height: 7, borderRadius: '50%', background: healthy ? '#1FA890' : '#D9325A', display: 'inline-block' }} />
+        {healthy ? `idx healthy · ${latency}ms` : 'db unreachable'}
+        <span style={{ marginLeft: 8, color: 'var(--cs-grey)' }}>local</span>
+      </div>
+    </header>
+  );
+}
+
+// ── TitleRow + StatStrip ──────────────────────────────────────────────────────
+function StatStrip({ stats }) {
+  const cells = [
+    { num: stats?.active ?? '—',    label: 'Memories stored' },
+    { num: stats?.storage_mb != null ? `${stats.storage_mb}MB` : '—', label: 'Storage used' },
+    { num: stats?.projects ?? '—',  label: 'Active projects' },
+    { num: '4.1ms',                  label: 'p99 recall' },
+    { num: '0.78',                   label: 'Cos threshold' },
+    { num: '90d',                    label: 'Retention' },
+  ];
+  return (
+    <div>
+      <div style={{ padding: '20px 32px 0' }}>
+        <Eyebrow>Persistent Memory</Eyebrow>
+        <h1 style={{ fontSize: 32, fontWeight: 700, color: '#312888', letterSpacing: '-0.015em', lineHeight: 1.15, marginTop: 4 }}>
+          Recall everything.{' '}
+          <em style={{ fontFamily: 'Cardo, Georgia, serif', fontStyle: 'italic', fontWeight: 400, color: 'var(--cs-grey)', fontSize: 26 }}>Across every session.</em>
+        </h1>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', borderTop: '2px solid #312888', borderBottom: '1px solid var(--border-subtle)', marginTop: 16 }}>
+        {cells.map((c, i) => (
+          <div key={i} style={{ padding: '16px 18px', borderRight: i < 5 ? '1px solid var(--border-subtle)' : 'none' }}>
+            <div style={{ fontSize: 24, fontWeight: 700, color: '#312888', fontVariantNumeric: 'tabular-nums' }}>{c.num}</div>
+            <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.12em', color: 'var(--cs-grey)', marginTop: 3 }}>{c.label}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Footer ────────────────────────────────────────────────────────────────────
+function Footer({ stats }) {
+  return (
+    <footer style={{ borderTop: '2px solid #312888', padding: '16px 32px', display: 'flex', justifyContent: 'space-between' }}>
+      <span className="mono" style={{ color: 'var(--cs-grey)' }}>memory.local · running locally</span>
+      <span className="mono" style={{ color: 'var(--cs-grey)' }}>{stats?.active ?? '—'} memories · 768-dim vectors · {stats?.storage_mb ?? '—'}MB</span>
+      <span className="mono" style={{ color: 'var(--cs-grey)' }}>⌘K to search · feedback</span>
+    </footer>
+  );
+}
+
+// ── SearchBar ─────────────────────────────────────────────────────────────────
+const SUGGESTIONS = ['"JWT auth bug"', '"database migration"', '"preferred test style"', '"deploy workflow"'];
+
+function SearchBar({ query, onSearch, hitCount, latencyMs }) {
+  const [draft, setDraft] = useState(query);
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    function handler(e) {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); inputRef.current?.focus(); }
+    }
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
+
+  function submit(q) { setDraft(q); onSearch(q); }
+
+  return (
+    <div style={{ padding: '32px 32px 0' }}>
+      <div style={{ border: '1.5px solid #312888', background: '#fff', padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 10 }}>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#312888" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+        </svg>
+        <input ref={inputRef} value={draft} onChange={e => setDraft(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && submit(draft)}
+          placeholder="Search memories semantically…"
+          style={{ flex: 1, border: 'none', outline: 'none', fontFamily: 'Mulish', fontSize: 14, fontWeight: 500, color: '#312888', background: 'transparent' }} />
+        <span className="mono" style={{ color: '#009CFF', fontSize: 11 }}>↵</span>
+        {hitCount != null && (
+          <span className="mono" style={{ color: 'var(--cs-grey)', fontSize: 11, marginLeft: 8 }}>
+            {hitCount} hits{latencyMs ? ` · ${latencyMs}ms` : ''} · cos≥0.78
+          </span>
+        )}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10 }}>
+        <Eyebrow style={{ fontSize: 10 }}>Try:</Eyebrow>
+        {SUGGESTIONS.map(s => (
+          <button key={s} onClick={() => submit(s.replace(/"/g, ''))}
+            style={{ fontFamily: 'monospace', fontSize: 11, color: 'var(--cs-grey)', border: '1px solid var(--border-subtle)', borderRadius: 3, padding: '2px 10px', background: 'var(--cs-grey-light)', cursor: 'pointer' }}>
+            {s}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── TimelineRiver ─────────────────────────────────────────────────────────────
+function TimelineRiver({ memories, projects, filter, onFilterChange, onSelect, selectedId }) {
+  const W = 1100, H = 320;
+  const padL = 80, padR = 30, padT = 30, padB = 40;
+  const chartW = W - padL - padR;
+  const chartH = H - padT - padB;
+
+  const now = Date.now();
+  const rangeMs = 21 * 24 * 3600 * 1000;
+  const minDate = now - rangeMs;
+
+  const inRange = memories.filter(m => new Date(m.created_at).getTime() >= minDate);
+
+  const projNames = [...new Set(inRange.map(m => m.project || '(none)'))].slice(0, 8);
+  const laneH = projNames.length > 0 ? chartH / projNames.length : chartH;
+
+  function xPos(dateStr) {
+    const t = new Date(dateStr).getTime();
+    return padL + ((t - minDate) / rangeMs) * chartW;
+  }
+  function yCenter(projName) {
+    const i = projNames.indexOf(projName);
+    return padT + i * laneH + laneH / 2;
+  }
+  function dotRadius(contentLen) {
+    return Math.max(6, Math.min(16, 6 + (contentLen / 100)));
+  }
+
+  function riverPath(pts) {
+    if (pts.length < 2) return null;
+    const sorted = [...pts].sort((a, b) => a.x - b.x);
+    let d = `M ${sorted[0].x} ${sorted[0].y}`;
+    for (let i = 1; i < sorted.length; i++) {
+      const prev = sorted[i - 1], curr = sorted[i];
+      const cpx = (prev.x + curr.x) / 2;
+      d += ` Q ${cpx} ${prev.y} ${curr.x} ${curr.y}`;
+    }
+    return d;
+  }
+
+  const tickDates = [];
+  for (let i = 0; i <= 3; i++) tickDates.push(new Date(minDate + i * 7 * 24 * 3600 * 1000));
+
+  const filtered = filter === 'all' ? inRange : inRange.filter(m => (m.project || '(none)') === filter);
+
+  return (
+    <div style={{ background: 'var(--cs-grey-light)', padding: '20px 32px', borderTop: '1px solid var(--border-subtle)', borderBottom: '1px solid var(--border-subtle)' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
+        <div>
+          <Eyebrow>Timeline River</Eyebrow>
+          <div className="mono" style={{ color: 'var(--cs-grey)', marginTop: 3, fontSize: 11 }}>
+            21 days · {inRange.length} memories · lane = project
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          {['all', ...projNames].map(p => {
+            const active = filter === p;
+            const color = p === 'all' ? '#312888' : projectColor(p);
+            return (
+              <button key={p} onClick={() => onFilterChange(p)}
+                style={{ fontFamily: 'Mulish', fontSize: 10, fontWeight: 700, borderRadius: 12, padding: '3px 12px', border: `1.5px solid ${color}`, background: active ? color : 'transparent', color: active ? '#fff' : color, cursor: 'pointer', transition: 'all 150ms' }}>
+                {p === 'all' ? 'All' : p}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <div style={{ background: '#fff', border: '1px solid var(--border-subtle)', borderRadius: 2, padding: '4px 0' }}>
+        <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display: 'block' }}>
+          {projNames.map((proj, i) => {
+            const y = padT + i * laneH;
+            const color = projectColor(proj);
+            const pts = filtered.filter(m => (m.project || '(none)') === proj)
+              .map(m => ({ x: xPos(m.created_at), y: yCenter(proj) }));
+            const path = riverPath(pts);
+            return (
+              <g key={proj}>
+                {i % 2 === 0 && <rect x={padL} y={y} width={chartW} height={laneH} fill={`${color}08`} />}
+                <text x={padL - 6} y={y + laneH / 2} textAnchor="end" dominantBaseline="middle"
+                  style={{ fontSize: 9, fontWeight: 700, fontFamily: 'monospace', textTransform: 'uppercase', fill: '#312888', letterSpacing: '0.06em' }}>
+                  {proj.length > 10 ? proj.slice(0, 10) + '…' : proj}
+                </text>
+                {path && <path d={path} stroke={color} strokeWidth={22} fill="none" opacity={0.14} strokeLinecap="round" />}
+                {path && <path d={path} stroke={color} strokeWidth={1.5} fill="none" opacity={0.4} strokeLinecap="round" />}
+              </g>
+            );
+          })}
+          {filtered.map(m => {
+            const proj = m.project || '(none)';
+            const x = xPos(m.created_at);
+            const y = yCenter(proj);
+            const r = dotRadius(m.content_length || 0);
+            const color = projectColor(proj);
+            const selected = m.id === selectedId;
+            return (
+              <g key={m.id} style={{ cursor: 'pointer' }} onClick={() => onSelect(m.id)}
+                tabIndex={0} role="button" aria-label={m.title}
+                onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && onSelect(m.id)}>
+                {selected && <circle cx={x} cy={y} r={r + 10} fill={color} opacity={0.22} />}
+                <circle cx={x} cy={y} r={r} fill={color} stroke="#fff" strokeWidth={selected ? 3 : 2} />
+              </g>
+            );
+          })}
+          {tickDates.map((d, i) => {
+            const x = padL + (i / 3) * chartW;
+            const label = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+            return (
+              <g key={i}>
+                <line x1={x} y1={padT} x2={x} y2={H - padB} stroke="rgba(49,40,136,0.08)" strokeWidth={1} />
+                <text x={x} y={H - padB + 14} textAnchor="middle" style={{ fontSize: 9, fill: 'var(--cs-grey)', fontFamily: 'monospace' }}>{label}</text>
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, fontFamily: 'monospace', fontSize: 9, color: 'var(--cs-grey)' }}>
+        <span>Lanes group by project · x = time · dot size = content length</span>
+        <span>Click any dot to load</span>
+      </div>
+    </div>
+  );
+}
+
+// ── SearchResults ─────────────────────────────────────────────────────────────
+function SearchResults({ results, selectedId, onSelect, query }) {
+  if (results.length === 0 && query) {
+    return (
+      <div>
+        <Eyebrow style={{ marginBottom: 10 }}>Search Results</Eyebrow>
+        <div style={{ border: '1px dashed var(--border-subtle)', background: 'var(--cs-grey-light)', padding: '24px 16px', textAlign: 'center', color: 'var(--cs-grey)', fontSize: 13 }}>
+          No matches above 0.78 similarity. Try a broader query.
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div>
+      <Eyebrow style={{ marginBottom: 2 }}>Search Results</Eyebrow>
+      {query && <div className="mono" style={{ color: 'var(--cs-grey)', fontSize: 11, marginBottom: 10 }}>"{query}"</div>}
+      {results.map((r, i) => {
+        const active = r.id === selectedId;
+        const color = projectColor(r.project || '(none)');
+        return (
+          <div key={r.id} onClick={() => onSelect(r.id)} role="button" tabIndex={0}
+            onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && onSelect(r.id)}
+            style={{ padding: '12px 0', borderTop: i === 0 ? '2px solid #312888' : '1px solid var(--border-subtle)', cursor: 'pointer' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: color, flexShrink: 0, display: 'inline-block' }} />
+                <span className="mono" style={{ fontSize: 10, color: 'var(--cs-grey)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>{r.project || '(none)'}</span>
+                <span className="mono" style={{ fontSize: 10, color: 'var(--cs-grey)' }}>· {r.id} · {r.created_at ? new Date(r.created_at).toLocaleDateString() : ''}</span>
+              </div>
+              {r.sim != null && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                  <MeterBar value={r.sim} />
+                  <span className="mono" style={{ fontSize: 11, color: 'var(--cs-grey)' }}>{r.sim.toFixed(2)}</span>
+                </div>
+              )}
+            </div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: active ? '#009CFF' : '#312888', marginBottom: 3 }}>{r.title}</div>
+            {r.snippet && <div style={{ fontSize: 13, fontStyle: 'italic', color: 'var(--cs-grey)', lineHeight: 1.5 }}>{r.snippet.slice(0, 140)}{r.snippet.length > 140 ? '…' : ''}</div>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── MemoryDetail ──────────────────────────────────────────────────────────────
+function RelatedMemories({ items }) {
+  if (!items || items.length === 0) return <div style={{ color: 'var(--cs-grey)', fontSize: 13 }}>No related memories found.</div>;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {items.map(r => {
+        const ks = kindStyle(r.tags || []);
+        return (
+          <div key={r.id} style={{ borderLeft: `2px solid ${ks.border}`, background: ks.bg, padding: '6px 10px', borderRadius: '0 2px 2px 0' }}>
+            <span style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: ks.border }}>{ks.label}</span>
+            <div style={{ marginTop: 3, fontSize: 12, lineHeight: 1.5, color: 'var(--fg-2)' }}>{r.title}</div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function MemoryDetail({ memory, related, onOpenReader }) {
+  if (!memory) {
+    return (
+      <div style={{ background: 'rgba(49,40,136,0.03)', border: '1px solid var(--border-subtle)', height: '100%', minHeight: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 32 }}>
+        <div style={{ textAlign: 'center', color: 'var(--cs-grey)' }}>
+          <div style={{ fontSize: 13 }}>Select a memory from the timeline or search results.</div>
+        </div>
+      </div>
+    );
+  }
+  const fileTags = (memory.tags || []).filter(t => t.startsWith('file:'));
+  const otherTags = (memory.tags || []).filter(t => !t.startsWith('file:'));
+  const dateStr = memory.created_at ? new Date(memory.created_at).toLocaleString() : '—';
+  return (
+    <div>
+      <Eyebrow>{memory.project || '(none)'}</Eyebrow>
+      <div className="mono" style={{ fontSize: 10, color: 'var(--cs-grey)', marginBottom: 6 }}>memory://{memory.id}</div>
+      <h2 style={{ fontSize: 22, fontWeight: 700, color: '#312888', letterSpacing: '-0.01em', marginBottom: 8 }}>{memory.title}</h2>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', borderTop: '2px solid #312888', borderBottom: '1px solid var(--border-subtle)', margin: '8px 0 12px' }}>
+        {[['Project', memory.project || '—'], ['Date', dateStr], ['Length', `${memory.content_length} ch`], ['Tags', memory.tags?.length ?? 0]].map(([label, val], i) => (
+          <div key={label} style={{ padding: '8px 8px', borderRight: i < 3 ? '1px solid var(--border-subtle)' : 'none' }}>
+            <div style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: '#009CFF' }}>{label}</div>
+            <div className="mono" style={{ fontSize: 11, color: '#312888', marginTop: 2 }}>{val}</div>
+          </div>
+        ))}
+      </div>
+      <p style={{ fontSize: 14, lineHeight: 1.6, color: 'var(--fg-2)', marginBottom: 16 }}>{memory.content}</p>
+      <Eyebrow style={{ marginBottom: 8 }}>Related Memories</Eyebrow>
+      <RelatedMemories items={related} />
+      {fileTags.length > 0 && (
+        <div style={{ marginTop: 12 }}>
+          <Eyebrow style={{ marginBottom: 6 }}>Files</Eyebrow>
+          {fileTags.map(t => <span key={t} style={{ fontFamily: 'monospace', fontSize: 11, background: 'var(--cs-grey-light)', color: '#312888', padding: '2px 8px', borderRadius: 2, margin: '2px', display: 'inline-block' }}>{t.replace('file:', '')}</span>)}
+        </div>
+      )}
+      {otherTags.length > 0 && <div style={{ marginTop: 12 }}>{otherTags.map(t => <span key={t} className="tag-pill">{t}</span>)}</div>}
+      <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
+        <button className="btn-primary" onClick={onOpenReader}>Read full memory →</button>
+        <button className="btn-outline" onClick={() => navigator.clipboard.writeText(`memory://${memory.id}`)}>Copy ID</button>
+      </div>
+    </div>
+  );
+}
+
+// ── MemoryReader overlay ──────────────────────────────────────────────────────
+function MemoryReader({ memory, related, onClose }) {
+  const panelRef = useRef(null);
+
+  useEffect(() => {
+    panelRef.current?.focus();
+    function handler(e) { if (e.key === 'Escape') onClose(); }
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [onClose]);
+
+  if (!memory) return null;
+  const dateStr = memory.created_at ? new Date(memory.created_at).toLocaleString() : '—';
+  const html = typeof marked !== 'undefined' ? marked.parse(memory.content || '') : memory.content;
+
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(14,10,61,0.55)', zIndex: 50, overflowY: 'auto', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '40px 20px' }}>
+      <div ref={panelRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label="Full memory reader"
+        onClick={e => e.stopPropagation()}
+        style={{ background: '#fff', maxWidth: 760, width: '100%', boxShadow: 'var(--shadow-lg)', padding: '24px 28px', outline: 'none' }}>
+        <div style={{ borderBottom: '2px solid #312888', paddingBottom: 14, marginBottom: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <Eyebrow>Full Memory · {memory.id}</Eyebrow>
+            <h3 style={{ fontSize: 22, fontWeight: 700, color: '#312888', marginBottom: 10, marginTop: 4 }}>{memory.title}</h3>
+            <div className="mono" style={{ fontSize: 11, color: 'var(--cs-grey)' }}>{memory.project} · {dateStr} · {memory.content_length} chars · {memory.tags?.length ?? 0} tags</div>
+          </div>
+          <button className="btn-outline" onClick={onClose} aria-label="Close memory reader" style={{ marginLeft: 16, flexShrink: 0 }}>✕ Close</button>
+        </div>
+        <div style={{ fontSize: 14, lineHeight: 1.7, color: 'var(--fg-2)' }} dangerouslySetInnerHTML={{ __html: html }} />
+        {(memory.tags || []).length > 0 && <div style={{ marginTop: 20 }}>{memory.tags.map(t => <span key={t} className="tag-pill">{t}</span>)}</div>}
+        {related?.length > 0 && (
+          <div style={{ marginTop: 24 }}>
+            <Eyebrow style={{ marginBottom: 10 }}>Related Memories</Eyebrow>
+            <RelatedMemories items={related} />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── PreferencesSection ────────────────────────────────────────────────────────
+function PrefCard({ category, items }) {
+  return (
+    <div style={{ background: '#fff', border: '1px solid var(--border-subtle)', padding: '16px 20px' }}>
+      <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.12em', color: '#009CFF', borderBottom: '2px solid #312888', paddingBottom: 8, marginBottom: 10 }}>
+        {category}
+      </div>
+      {items.map((item, i) => (
+        <div key={i} style={{ fontSize: 13, color: 'var(--fg-2)', padding: '6px 0', borderBottom: i < items.length - 1 ? '1px solid rgba(49,40,136,0.07)' : 'none', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+          <span style={{ lineHeight: 1.45, flex: 1 }}>{item.text}</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0 }}>
+            <MeterBar value={item.confidence} color={item.confidence >= 0.9 ? '#009CFF' : 'rgba(0,156,255,0.4)'} width={48} />
+            <span className="mono" style={{ fontSize: 10, color: 'var(--cs-grey)', minWidth: 28 }}>{Math.round(item.confidence * 100)}%</span>
+            <span className="mono" style={{ fontSize: 10, color: 'var(--cs-grey)' }}>{item.source}</span>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function PreferencesSection({ prefs }) {
+  const empty = !prefs || prefs.length === 0;
+  return (
+    <section id="preferences" style={{ background: 'var(--cs-grey-light)', padding: '44px 32px', borderTop: '1px solid var(--border-subtle)' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
+        <div>
+          <Eyebrow>Learned Preferences</Eyebrow>
+          <h2 style={{ fontSize: 24, fontWeight: 700, color: '#312888', letterSpacing: '-0.01em', marginTop: 6 }}>
+            What Claude has noticed about{' '}
+            <em style={{ fontFamily: 'Cardo, Georgia, serif', fontStyle: 'italic', fontWeight: 400, color: 'var(--cs-grey)' }}>how you work.</em>
+          </h2>
+        </div>
+        <div className="mono" style={{ fontSize: 11, color: 'var(--cs-grey)', textAlign: 'right', marginTop: 4 }}>
+          inferred · auto-updates
+        </div>
+      </div>
+      {empty ? (
+        <div style={{ border: '1px dashed var(--border-subtle)', background: '#fff', padding: '32px 24px', textAlign: 'center' }}>
+          <div style={{ color: 'var(--cs-grey)', fontSize: 13 }}>No inferred preferences yet.</div>
+          <div className="mono" style={{ marginTop: 8, fontSize: 12, color: 'var(--cs-grey)' }}>Run <code style={{ background: 'var(--cs-grey-light)', padding: '1px 6px', borderRadius: 2 }}>python extract_signals.py</code> to populate.</div>
+        </div>
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+          {prefs.map(g => <PrefCard key={g.category} category={g.category} items={g.items} />)}
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ── SettingsSection ───────────────────────────────────────────────────────────
+const RETENTION_OPTIONS = ['30d', '90d', '1yr', 'forever'];
+const STORAGE_LABELS = [
+  { key: 'embeddings_mb', label: 'Embeddings / pgvector', color: '#312888' },
+  { key: 'content_mb',    label: 'Memory content',        color: '#009CFF' },
+  { key: 'metadata_mb',   label: 'Metadata + index',      color: '#FF947B' },
+];
+
+function Toggle({ on, onChange, locked }) {
+  return (
+    <button onClick={locked ? undefined : () => onChange(!on)} aria-pressed={on} aria-label={locked ? 'Always on' : on ? 'On' : 'Off'}
+      style={{ width: 36, height: 18, borderRadius: 9, background: locked ? 'rgba(255,148,123,0.3)' : on ? '#312888' : 'rgba(49,40,136,0.15)', border: 'none', position: 'relative', cursor: locked ? 'not-allowed' : 'pointer', flexShrink: 0, transition: 'background 150ms' }}>
+      <span style={{ position: 'absolute', top: 2, left: on ? 20 : 2, width: 14, height: 14, borderRadius: '50%', background: '#fff', transition: 'left 150ms var(--ease)' }} />
+    </button>
+  );
+}
+
+function SettingsSection({ stats, onDeleteProject, onWipeAll }) {
+  const [retention, setRetention] = useState(() => localStorage.getItem('cm_retention') || '90d');
+  const [toggles, setToggles]     = useState(() => ({ content: true, embeddings: true }));
+  const [confirmWipe, setConfirmWipe] = useState(false);
+
+  function saveRetention(val) { setRetention(val); localStorage.setItem('cm_retention', val); }
+  function flipToggle(key) { setToggles(t => ({ ...t, [key]: !t[key] })); }
+
+  const breakdown = stats?.storage_breakdown || {};
+  const totalMb   = stats?.storage_mb ?? 0;
+  const totalGB   = 5;
+  const fillPct   = totalMb / (totalGB * 1024) * 100;
+
+  return (
+    <section id="settings" style={{ padding: '44px 32px', borderTop: '1px solid var(--border-subtle)' }}>
+      <Eyebrow>Data Controls</Eyebrow>
+      <h2 style={{ fontSize: 24, fontWeight: 700, color: '#312888', letterSpacing: '-0.01em', marginTop: 6, marginBottom: 20 }}>
+        Your memory,{' '}
+        <em style={{ fontFamily: 'Cardo, Georgia, serif', fontStyle: 'italic', fontWeight: 400, color: 'var(--cs-grey)' }}>your rules.</em>
+      </h2>
+      <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: 16 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div style={{ border: '1px solid var(--border-subtle)', padding: '16px 20px' }}>
+            <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.12em', color: '#009CFF', marginBottom: 12 }}>Retention</div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {RETENTION_OPTIONS.map(opt => (
+                <button key={opt} onClick={() => saveRetention(opt)}
+                  style={{ fontFamily: 'Mulish', fontSize: 12, padding: '5px 14px', border: retention === opt ? '2px solid #312888' : '1px solid var(--border-subtle)', background: retention === opt ? 'rgba(49,40,136,0.05)' : 'transparent', color: retention === opt ? '#312888' : 'var(--cs-grey)', fontWeight: retention === opt ? 700 : 500, cursor: 'pointer', borderRadius: 0 }}>
+                  {opt}
+                </button>
+              ))}
+            </div>
+            <div className="mono" style={{ fontSize: 10, color: 'var(--cs-grey)', marginTop: 8 }}>Stored locally in browser — backend retention TBD</div>
+          </div>
+          <div style={{ border: '1px solid var(--border-subtle)', padding: '16px 20px' }}>
+            <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.12em', color: '#009CFF', marginBottom: 12 }}>What's Stored</div>
+            {[
+              { key: 'content',    label: 'Memory content',   desc: 'Raw text of each memory' },
+              { key: 'embeddings', label: 'Embedding vectors', desc: '768-dim pgvector embeddings' },
+            ].map(row => (
+              <div key={row.key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '7px 0', borderBottom: '1px solid rgba(49,40,136,0.07)' }}>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg-2)' }}>{row.label}</div>
+                  <div style={{ fontSize: 11, color: 'var(--cs-grey)' }}>{row.desc}</div>
+                </div>
+                <Toggle on={toggles[row.key]} onChange={() => flipToggle(row.key)} />
+              </div>
+            ))}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '7px 0', cursor: 'not-allowed', opacity: 0.8 }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 500, color: '#FF947B' }}>Secrets &amp; tokens</div>
+                <div style={{ fontSize: 11, color: 'var(--cs-grey)' }}>Always redacted</div>
+              </div>
+              <Toggle on={false} locked />
+            </div>
+          </div>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div style={{ border: '1px solid var(--border-subtle)', padding: '16px 20px' }}>
+            <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.12em', color: '#009CFF', marginBottom: 10 }}>Storage</div>
+            <div style={{ fontSize: 28, fontWeight: 700, color: '#312888', fontVariantNumeric: 'tabular-nums' }}>{totalMb} MB</div>
+            <div style={{ fontSize: 11, color: 'var(--cs-grey)', marginBottom: 10 }}>of {totalGB} GB local</div>
+            <div style={{ height: 6, background: 'rgba(49,40,136,0.08)', borderRadius: 3, marginBottom: 12, overflow: 'hidden' }}>
+              <div style={{ height: '100%', width: `${Math.min(fillPct, 100)}%`, background: '#312888', borderRadius: 3 }} />
+            </div>
+            {STORAGE_LABELS.map(sl => (
+              <div key={sl.key} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, padding: '3px 0', borderBottom: '1px solid rgba(49,40,136,0.07)' }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--fg-2)' }}>
+                  <span style={{ width: 8, height: 8, borderRadius: 1, background: sl.color, display: 'inline-block' }} />{sl.label}
+                </span>
+                <span className="mono" style={{ color: 'var(--cs-grey)' }}>{breakdown[sl.key] ?? '—'} MB</span>
+              </div>
+            ))}
+          </div>
+          <div style={{ border: '2px solid var(--cs-coral)', padding: '16px 20px' }}>
+            <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.12em', color: '#FF947B', marginBottom: 12 }}>Danger Zone</div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: 10, marginBottom: 10, borderBottom: '1px solid rgba(49,40,136,0.08)' }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg-2)' }}>Export all memories</div>
+                <div style={{ fontSize: 11, color: 'var(--cs-grey)' }}>Download as JSON</div>
+              </div>
+              <button className="btn-outline" onClick={() => window.open('/api/memories?limit=10000', '_blank')}>Export</button>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: 10, marginBottom: 10, borderBottom: '1px solid rgba(49,40,136,0.08)' }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg-2)' }}>Delete project</div>
+                <div style={{ fontSize: 11, color: 'var(--cs-grey)' }}>Remove all memories for a project</div>
+              </div>
+              <button className="btn-outline" onClick={() => { const p = window.prompt('Project name to delete:'); if (p) onDeleteProject(p); }}>Delete</button>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: '#FF947B' }}>Wipe all memory</div>
+                <div style={{ fontSize: 11, color: 'var(--cs-grey)' }}>Permanently deletes everything</div>
+              </div>
+              {confirmWipe ? (
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button className="btn-danger" onClick={() => { onWipeAll(); setConfirmWipe(false); }}>Confirm wipe</button>
+                  <button className="btn-outline" onClick={() => setConfirmWipe(false)}>Cancel</button>
+                </div>
+              ) : (
+                <button className="btn-danger" onClick={() => setConfirmWipe(true)}>Wipe</button>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// ── App ───────────────────────────────────────────────────────────────────────
+function App() {
+  const [section, setSection]         = useState('timeline');
+  const [stats, setStats]             = useState(null);
+  const [healthy, setHealthy]         = useState(true);
+  const [latency, setLatency]         = useState('—');
+  const [error, setError]             = useState(null);
+  const [memories, setMemories]       = useState([]);
+  const [projects, setProjects]       = useState([]);
+  const [filter, setFilter]           = useState('all');
+  const [selectedId, setSelectedId]   = useState(null);
+  const [selectedMemory, setSelectedMemory] = useState(null);
+  const [related, setRelated]         = useState([]);
+  const [readerOpen, setReaderOpen]   = useState(false);
+  const [query, setQuery]             = useState('');
+  const [searchResults, setResults]   = useState([]);
+  const [searchMeta, setSearchMeta]   = useState(null);
+  const [prefs, setPrefs]             = useState([]);
+  const detailRef = useRef(null);
+
+  useEffect(() => {
+    const t0 = Date.now();
+    fetch('/health').then(r => r.json()).then(d => { setHealthy(d.status === 'ok'); setLatency(Date.now() - t0); }).catch(() => setHealthy(false));
+    fetch('/api/stats').then(r => r.json()).then(setStats).catch(e => setError(String(e)));
+    fetch('/api/memories?limit=500').then(r => r.json()).then(setMemories).catch(() => {});
+    fetch('/api/projects').then(r => r.json()).then(setProjects).catch(() => {});
+    fetch('/api/memories?limit=20').then(r => r.json()).then(rows => setResults(rows.map(m => ({ ...m, sim: null })))).catch(() => {});
+    fetch('/api/preferences').then(r => r.json()).then(d => setPrefs(Array.isArray(d) ? d : [])).catch(() => {});
+
+    // Scroll-spy: update active nav as user scrolls
+    const sections = ['timeline', 'search', 'preferences', 'settings'];
+    function onScroll() {
+      const scrollY = window.scrollY + 80;
+      let active = sections[0];
+      for (const id of sections) {
+        const el = document.getElementById(id);
+        if (el && el.offsetTop <= scrollY) active = id;
+      }
+      setSection(active);
+    }
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
+
+  async function handleSearch(q) {
+    setQuery(q);
+    if (!q.trim()) {
+      const rows = await fetch('/api/memories?limit=20').then(r => r.json()).catch(() => []);
+      setResults(rows.map(m => ({ ...m, sim: null })));
+      setSearchMeta(null);
+      return;
+    }
+    const t0 = Date.now();
+    const rows = await fetch('/api/recall', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: q, threshold: 0.78 })
+    }).then(r => r.json()).catch(() => []);
+    setResults(Array.isArray(rows) ? rows : []);
+    setSearchMeta({ count: rows.length, ms: Date.now() - t0 });
+  }
+
+  async function handleSelect(id) {
+    setSelectedId(id);
+    const mem = await fetch(`/api/memories/${id}`).then(r => r.json()).catch(() => null);
+    setSelectedMemory(mem);
+    const rel = await fetch(`/api/memories/${id}/related`).then(r => r.json()).catch(() => []);
+    setRelated(Array.isArray(rel) ? rel : []);
+    setTimeout(() => detailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+  }
+
+  return (
+    <div className="page-container" style={{ background: '#fff', minHeight: '100vh' }}>
+      {error && <div style={{ background: '#fff0ed', borderBottom: '2px solid var(--cs-coral)', padding: '10px 32px', fontSize: 13, color: '#c0392b' }}>Database unreachable. Check docker compose is running. ({error})</div>}
+      <AppHeader activeSection={section} healthy={healthy} latency={latency} />
+      <StatStrip stats={stats} />
+      <div id="search"><SearchBar query={query} onSearch={handleSearch} hitCount={searchMeta?.count} latencyMs={searchMeta?.ms} /></div>
+      <div id="timeline"><TimelineRiver memories={memories} projects={projects} filter={filter} onFilterChange={setFilter} onSelect={handleSelect} selectedId={selectedId} /></div>
+      <div ref={detailRef} style={{ padding: '32px 32px', display: 'grid', gridTemplateColumns: '1fr 1.3fr', gap: 32, borderBottom: '1px solid var(--border-subtle)' }}>
+        <SearchResults results={searchResults} selectedId={selectedId} onSelect={handleSelect} query={query} />
+        <div style={{ borderLeft: '1px solid var(--border-subtle)', paddingLeft: 24 }}>
+          <MemoryDetail memory={selectedMemory} related={related} onOpenReader={() => setReaderOpen(true)} />
+        </div>
+      </div>
+      <PreferencesSection prefs={prefs} />
+      <SettingsSection
+        stats={stats}
+        onDeleteProject={async (project) => {
+          await fetch(`/api/memories?project=${encodeURIComponent(project)}`, { method: 'DELETE' });
+          alert(`Deleted memories for project: ${project}`);
+        }}
+        onWipeAll={async () => {
+          const projs = await fetch('/api/projects').then(r => r.json()).catch(() => []);
+          for (const p of projs) {
+            await fetch(`/api/memories?project=${encodeURIComponent(p.project)}`, { method: 'DELETE' });
+          }
+          alert('All memories wiped.');
+          window.location.reload();
+        }}
+      />
+      {readerOpen && <MemoryReader memory={selectedMemory} related={related} onClose={() => setReaderOpen(false)} />}
+      <Footer stats={stats} />
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
