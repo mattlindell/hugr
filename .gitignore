@@ -1,7 +1,6 @@
 data/
 backups/
 EXPLAINER_SCRIPT.md
-.claude/
 __pycache__/
 *.pyc
 .env
@@ -10,3 +9,5 @@ __pycache__/
 .superpowers/
 docs/superpowers/
 venv/
+
+*.local.*

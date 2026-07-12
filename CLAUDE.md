@@ -187,3 +187,19 @@ pytest tests/ -v   # inherited mocked suite — no Docker or GPU required
 ```
 
 Heavy dependencies (sentence-transformers, psycopg2, openai) are mocked by `tests/conftest.py`.
+
+---
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs live in **Linear** — team **Photon Ventures** (`PV`), project **Hugr**. Default to the `linearis` CLI (fast path); fall back to the Linear MCP for what the CLI can't do (e.g. creating labels). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical triage states map 1:1 to Linear labels under the "Agentic State Machine" group. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
