@@ -5,6 +5,27 @@
 **To:** Claude Code agent picking up the build
 **Status:** Design locked; ready to implement. No code written yet.
 
+> **Revisions — 2026-07-12 (post-grilling).** A design grilling session refined this handoff
+> against the user's actual infrastructure and preferences. The decisions below are recorded in
+> `docs/adr/`; `CONTEXT.md` holds the vocabulary. Where this document and an ADR disagree, **the
+> ADR wins.** Superseded assumptions:
+>
+> - **CLI-first, MCP dropped** (ADR 0001) — replaces "reuse the FastMCP server + tool surface
+>   ~as-is." Everything runs locally; MCP is re-addable later as a thin shim.
+> - **Dedicated pgvector instance, not the home cluster** (ADR 0005) — the existing home Postgres
+>   is shared production `postgres:14.6` running Home Assistant, etc. 0.5 runs a desktop-local
+>   `pgvector/pgvector:pg17` container. Replaces "PostgreSQL 16 on the home server."
+> - **bge-m3 / 1024-dim embeddings** via LiteLLM on the Jetson (ADR 0004) — replaces
+>   `all-mpnet-base-v2` / 768. Distillation uses the already-live `ollama/qwen2.5-14b-32k`.
+> - **HNSW** confirmed (ADR 0004); **snapshot-file fail-open hook** with a cold-start invariant
+>   (ADR 0003); **dedicated keyed `facts` table + confirmed-only write path** (ADR 0002).
+> - **Tailnet dropped for now** — the dev machine is a desktop that doesn't travel; localhost
+>   binding suffices. Home-server hosting / systemd is a follow-on.
+> - **ACP injection risk retired** — `UserPromptSubmit` `additionalContext` is proven working over
+>   Zed ACP (the user's actual runtime); the VS Code bug #49063 does not apply (no VS Code in use).
+> - **Staging:** `0.5` = Facts + hook + CLI + confirmation Console (no embeddings/import/distill);
+>   `1.0` = episodic re-wiring; project-scoped Facts / Conclave critic / compiled CLI are follow-on.
+
 ---
 
 ## Objective
